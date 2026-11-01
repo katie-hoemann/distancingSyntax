@@ -1,0 +1,478 @@
+---
+title: "psychological_distancing_20260528"
+author: "Katie"
+format: html
+embed-resources: true
+---
+
+## Read in and prepare data
+
+```{r}
+# load required libraries (install if necessary)
+library(readr)
+library(dplyr)
+library(lme4) 
+library(lmerTest)
+library(broom.mixed)
+library(mlVAR)
+library(datawizard)
+library(psych)
+library(ggplot2)
+library(easystats)
+library(jtools)
+```
+
+```{r}
+# read in data
+d_text <- read.csv("raw_data_syntactic_features_April 2026_pattern_LIWC.csv", fileEncoding='UTF-8-BOM')
+```
+
+```{r}
+# filter data
+d_text <- d_text[d_text$WC >= 15, ]
+dim(d_text)
+```
+
+## Calculate linguistic distancing variables from LIWC
+
+```{r}
+# z-score relevant LIWC variables
+d_text$Zi <- standardize(d_text$i)
+d_text$Zfocuspresent <- standardize(d_text$focuspresent)
+d_text$Zarticle <- standardize(d_text$article)
+d_text$Zdiscrep <- standardize(d_text$discrep)
+d_text$ZBigWords <- standardize(d_text$BigWords)
+```
+
+```{r}
+# reverse score necessary variables
+d_text$Zi_rev <- d_text$Zi*-1
+d_text$Zfocuspresent_rev <- d_text$Zfocuspresent*-1
+d_text$Zdiscrep_rev <- d_text$discrep*-1
+```
+
+```{r}
+# function to average variables
+rowwise_mean <- function(d_subset) {
+  Reduce(`+`, d_subset) / ncol(d_subset)
+}
+d_text$distance_fullLIWC <- rowwise_mean(d_text[, c("Zi_rev", "Zfocuspresent_rev", "Zarticle", "Zdiscrep_rev", "ZBigWords")])
+d_text$distance_partialLIWC <- rowwise_mean(d_text[, c("Zi_rev", "Zfocuspresent_rev")]) # using only first-person singular pronouns and past tense
+```
+
+
+## Calculate linguistic distancing variables from syntactic features
+
+```{r}
+# convert to percentages of total text length
+d_text$pron_I_pct <- d_text$pron_I/d_text$WC*100
+d_text$pron_me_pct <- d_text$pron_me/d_text$WC*100
+d_text$pron_mine_pct <- d_text$pron_mine/d_text$WC*100
+d_text$verb_npp_pct <- d_text$verb_npp/d_text$WC*100
+d_text$verb_npi_pct <- d_text$verb_npi/d_text$WC*100
+```
+
+```{r}
+# aggregate variables to compare with LIWC
+d_text$i_pronouns <- d_text$pron_I_pct + d_text$pron_me_pct + d_text$pron_mine_pct # should be equivalent to i
+d_text$nonpast_verbs <- d_text$verb_npp_pct + d_text$verb_npi_pct # should be equivalent to focuspresent
+```
+
+```{r}
+# define new potential measure of linguistic distancing
+d_text$Zpron_I_pct <- standardize(d_text$pron_I_pct)
+d_text$Zverb_npi_pct <- standardize(d_text$verb_npi_pct)
+
+d_text$Zpron_I_pct_rev <- d_text$Zpron_I_pct*-1
+d_text$Zverb_npi_pct_rev <- d_text$Zverb_npi_pct*-1
+
+d_text$distance_syntax <- rowwise_mean(d_text[, c("Zpron_I_pct_rev", "Zverb_npi_pct_rev")])
+```
+
+
+## Create correlation matrix of distancing variables
+
+```{r}
+d_corr_text_distance <- d_text[, c("distance_fullLIWC", "distance_partialLIWC", "distance_syntax", "i", "i_pronouns", "pron_I_pct", "pron_me_pct", "pron_mine_pct",
+                         "focuspresent", "nonpast_verbs", "verb_npp_pct", "verb_npi_pct")]
+```
+
+```{r}
+new_names_text_distance <- c("fLIWC", "pLIWC", "syntax", "iLIWC", "iPron", "I", "me", "mine", "npLIWC", "npVerb", "perf", "imperf")
+colnames(d_corr_text_distance) <- new_names_text_distance
+```
+
+```{r}
+pdf("scatterplot_text_distance.pdf")
+pairs.panels(d_corr_text_distance,
+             method = "pearson",
+             hist.col = "#00AFBB",
+             density = FALSE,
+             ellipses = FALSE,
+             lm = TRUE,
+             show.points = TRUE,
+             smoother = TRUE,
+             stars = TRUE
+             )
+dev.off()
+```
+
+## Create correlation matrix of all momentary variables
+
+```{r}
+d_corr_text_all <- d_text[, c("valence", "polarity", "posemo", "negemo", "distance_fullLIWC", "distance_partialLIWC", "distance_syntax", 
+                    "i", "pron_I_pct", "pron_me_pct", "pron_mine_pct", "focuspresent", "verb_npp_pct", "verb_npi_pct")]
+```
+
+```{r}
+new_names_text_all <- c("val", "sent", "pos", "neg", "fLIWC", "pLIWC", "syntax", "iLIWC", "I", "me", "mine", "npLIWC", "perf", "imperf")
+colnames(d_corr_text_all) <- new_names_text_all
+```
+
+```{r}
+pdf("scatterplot_text_all.pdf")
+pairs.panels(d_corr_text_all,
+             method = "pearson",
+             hist.col = "#00AFBB",
+             density = FALSE,
+             ellipses = FALSE,
+             lm = TRUE,
+             show.points = TRUE,
+             smoother = TRUE,
+             stars = TRUE
+             )
+dev.off()
+```
+
+
+## Prepare variables for analyses at the momentary level
+
+```{r}
+# person-mean-center L1 variables for regression to separate within and between subjects variance
+d_text <- d_text %>%
+  group_by(connectionId) %>%
+  mutate(
+    distance_fullLIWC_w = distance_fullLIWC - mean(distance_fullLIWC, na.rm = TRUE),
+    distance_partialLIWC_w = distance_partialLIWC - mean(distance_partialLIWC, na.rm = TRUE),
+    iLIWC_w = i - mean(i, na.rm = TRUE),
+    npLIWC_w = focuspresent - mean(focuspresent, na.rm = TRUE),
+    distance_syntax_w = distance_syntax - mean(distance_syntax, na.rm = TRUE),
+    polarity_w = polarity - mean(polarity, na.rm = TRUE),
+    iPron_w = pron_I_pct - mean(pron_I_pct, na.rm = TRUE),
+    mePron_w = pron_me_pct - mean(pron_me_pct, na.rm = TRUE),
+    minePron_w = pron_mine_pct - mean(pron_mine_pct, na.rm = TRUE),
+    nppVerb_w = verb_npp_pct - mean(verb_npp_pct, na.rm = TRUE),
+    npiVerb_w = verb_npi_pct - mean(verb_npi_pct, na.rm = TRUE)
+    ) %>%
+  ungroup()
+```
+
+```{r}
+# standardize L1 variables
+d_text$distance_fullLIWC_w_z = standardize(d_text$distance_fullLIWC_w)
+d_text$distance_partialLIWC_w_z = standardize(d_text$distance_partialLIWC_w)
+d_text$iLIWC_w_z = standardize(d_text$iLIWC_w)
+d_text$npLIWC_w_z = standardize(d_text$npLIWC_w)
+d_text$distance_syntax_w_z = standardize(d_text$distance_syntax_w)
+d_text$polarity_w_z = standardize(d_text$polarity_w)
+d_text$iPron_w_z = standardize(d_text$iPron_w)
+d_text$mePron_w_z = standardize(d_text$mePron_w)
+d_text$minePron_w_z = standardize(d_text$minePron_w)
+d_text$nppVerb_w_z = standardize(d_text$nppVerb_w)
+d_text$npiVerb_w_z = standardize(d_text$npiVerb_w)
+```
+
+```{r}
+# standardize L2 variables separately
+l2_std <- d_text %>%
+  summarize(
+    distance_fullLIWC_b = mean(distance_fullLIWC, na.rm = TRUE),
+    distance_partialLIWC_b = mean(distance_partialLIWC, na.rm = TRUE),
+    iLIWC_b = mean(i, na.rm = TRUE),
+    npLIWC_b = mean(focuspresent, na.rm = TRUE),
+    distance_syntax_b = mean(distance_syntax, na.rm = TRUE),
+    polarity_b = mean(polarity, na.rm = TRUE),
+    iPron_b = mean(pron_I_pct, na.rm = TRUE),
+    mePron_b = mean(pron_me_pct, na.rm = TRUE),
+    minePron_b = mean(pron_mine_pct, na.rm = TRUE),
+    nppVerb_b = mean(verb_npp_pct, na.rm = TRUE),
+    npiVerb_b = mean(verb_npi_pct, na.rm = TRUE),
+    .by = connectionId) %>%
+  mutate(
+    distance_fullLIWC_b_z = standardize(distance_fullLIWC_b),
+    distance_partialLIWC_b_z = standardize(distance_partialLIWC_b),
+    iLIWC_b_z = standardize(iLIWC_b),
+    npLIWC_b_z = standardize(npLIWC_b),
+    distance_syntax_b_z = standardize(distance_syntax_b),
+    polarity_b_z = standardize(polarity_b),
+    iPron_b_z = standardize(iPron_b),
+    mePron_b_z = standardize(mePron_b),
+    minePron_b_z = standardize(minePron_b),
+    nppVerb_b_z = standardize(nppVerb_b),
+    npiVerb_b_z = standardize(npiVerb_b))
+d_text <- d_text %>%
+  left_join(l2_std, by = "connectionId")
+```
+
+
+## Run multilevel regression models
+
+### initial null model
+
+```{r}
+mlm_null <- lmer(valence ~ 1 + (1|connectionId), data=d_text)
+icc(mlm_null)
+```
+### full LIWC composite
+
+```{r}
+mlm_fullLIWC <- lmer(valence ~ distance_fullLIWC_w_z + (distance_fullLIWC_b_z|connectionId), data=d_text)
+summary(mlm_fullLIWC)
+# write.csv(tidy(mlm_fullLIWC, conf.int = TRUE),"mlm_fullLIWC.csv") # if you want to generate a spreadsheet table of the results
+```
+
+```{r}
+mlm_fullLIWC_sentiment <- lmer(valence ~ distance_fullLIWC_w_z * polarity_w_z + (distance_fullLIWC_b_z * polarity_b_z|connectionId), data=d_text)
+summary(mlm_fullLIWC_sentiment)
+```
+
+```{r}
+# https://easystats.github.io/modelbased/reference/estimate_slopes.html 
+#slopes_fullLIWC_sentiment <- estimate_slopes(mlm_fullLIWC_sentiment, trend = "distance_fullLIWC_w_z", by = "polarity_w_z = [sd]") # not working for some reason
+slopes_fullLIWC_sentiment <- estimate_slopes(mlm_fullLIWC_sentiment, trend = "distance_fullLIWC_w_z", by = "polarity_w_z", length = 100)
+summary(slopes_fullLIWC_sentiment)
+```
+
+
+
+### partial LIWC composite
+
+```{r}
+mlm_partialLIWC <- lmer(valence ~ distance_partialLIWC_w_z + (distance_partialLIWC_b_z|connectionId), data=d_text)
+summary(mlm_partialLIWC)
+```
+
+```{r}
+mlm_partialLIWC_sentiment <- lmer(valence ~ distance_partialLIWC_w_z * polarity_w_z + (distance_partialLIWC_b_z * polarity_b_z|connectionId), data=d_text)
+summary(mlm_partialLIWC_sentiment)
+```
+
+
+```{r}
+slopes_partialLIWC_sentiment <- estimate_slopes(mlm_partialLIWC_sentiment, trend = "distance_partialLIWC_w_z", by = "polarity_w_z", length = 100)
+summary(slopes_partialLIWC_sentiment)
+```
+
+### LIWC i
+
+```{r}
+mlm_iLIWC <- lmer(valence ~ iLIWC_w_z + (iLIWC_b_z|connectionId), data=d_text)
+summary(mlm_iLIWC)
+```
+
+```{r}
+mlm_iLIWC_sentiment <- lmer(valence ~ iLIWC_w_z * polarity_w_z + (iLIWC_b_z * polarity_b_z|connectionId), data=d_text)
+summary(mlm_iLIWC_sentiment)
+```
+
+### LIWC np verbs
+
+```{r}
+mlm_npLIWC <- lmer(valence ~ npLIWC_w_z + (npLIWC_b_z|connectionId), data=d_text)
+summary(mlm_npLIWC)
+```
+
+```{r}
+mlm_npLIWC_sentiment <- lmer(valence ~ npLIWC_w_z * polarity_w_z + (npLIWC_b_z * polarity_b_z|connectionId), data=d_text)
+summary(mlm_npLIWC_sentiment)
+```
+
+### i Pronouns
+
+```{r}
+mlm_iPronouns <- lmer(valence ~ iPron_w_z + mePron_w_z + minePron_w_z + (iPron_b_z + mePron_b_z + minePron_b_z|connectionId), data=d_text)
+summary(mlm_iPronouns)
+```
+
+```{r}
+mlm_iPronouns_sentiment <- lmer(valence ~ iPron_w_z + mePron_w_z + minePron_w_z + polarity_w_z + (iPron_b_z + mePron_b_z + minePron_b_z + polarity_b_z|connectionId), data=d_text)
+summary(mlm_iPronouns_sentiment)
+```
+
+### np Verbs
+
+```{r}
+mlm_npVerbs <- lmer(valence ~ nppVerb_w_z + npiVerb_w_z + (nppVerb_b_z + npiVerb_b_z|connectionId), data=d_text)
+summary(mlm_npVerbs)
+```
+
+```{r}
+mlm_npVerbs_sentiment <- lmer(valence ~ nppVerb_w_z + npiVerb_w_z + polarity_b_z + (nppVerb_b_z + npiVerb_b_z + polarity_w_z|connectionId), data=d_text)
+summary(mlm_npVerbs_sentiment)
+```
+
+### new syntax distance
+
+```{r}
+mlm_syntax <- lmer(valence ~ distance_syntax_w_z + (distance_syntax_b_z|connectionId), data=d_text)
+summary(mlm_syntax)
+```
+
+```{r}
+mlm_syntax_sentiment <- lmer(valence ~ distance_syntax_w_z * polarity_w_z + (distance_syntax_b_z * polarity_b_z|connectionId), data=d_text)
+summary(mlm_syntax_sentiment)
+```
+
+```{r}
+slopes_syntax_sentiment <- estimate_slopes(mlm_syntax_sentiment, trend = "distance_syntax_w_z", by = "polarity_w_z", length = 100)
+summary(slopes_syntax_sentiment)
+```
+
+
+
+## Run multilevel VAR models
+
+```{r}
+mlvar_fullLIWC <- mlVAR(d_text, vars = c("distance_fullLIWC","valence"), idvar="connectionId", lags=1, estimator="lmer", scale=TRUE, scaleWithin=TRUE)
+summary(mlvar_fullLIWC, show=c("fit", "temporal", "contemporaneous"), round=3)
+```
+
+```{r}
+mlvar_partialLIWC <- mlVAR(d_text, vars = c("distance_partialLIWC","valence"), idvar="connectionId", lags=1, estimator="lmer", scale=TRUE, scaleWithin=TRUE)
+summary(mlvar_partialLIWC, show=c("fit", "temporal", "contemporaneous"), round=3)
+```
+
+```{r}
+mlvar_syntax <- mlVAR(d_text, vars = c("distance_syntax","valence"), idvar="connectionId", lags=1, estimator="lmer", scale=TRUE, scaleWithin=TRUE)
+summary(mlvar_syntax, show=c("fit", "temporal", "contemporaneous"), round=3)
+```
+
+
+## Read in and prepare data for analyses at the person level
+
+```{r}
+# read in questionnaire data
+d_quest <- read_csv("All questionnaires_merged_no duplicate responses_all columns_updated scores_fixed IDs.csv", show_col_types = FALSE)
+```
+
+```{r}
+# aggregate all questionnaire assessments
+d_person <- d_quest %>%
+  summarize(
+    PsychQOL_mean = mean(Psychological_Mean),
+    DASS_mean = mean(DASS_Total),
+    Depression_mean = mean(Depression),
+    Anxiety_mean = mean(Anxiety),
+    Stress_mean = mean(Stress),
+    DIF_mean = mean(DIF),
+    DDF_mean = mean(DDF),
+    EOT_mean = mean(EOT),
+    TAS_mean = mean(TAS_Total),
+    TEIQ_mean = mean(TEIQ_Total),
+    .by = alias)
+```
+
+```{r}
+# standardize variables to assist with coefficient interpretation
+d_person <- standardize(d_person, c("PsychQOL_mean", "DASS_mean", "Depression_mean", "Anxiety_mean", "Stress_mean", "DIF_mean", "DDF_mean", "EOT_mean", "TAS_mean", "TEIQ_mean"))
+```
+
+```{r}
+# join with aggregated text-level predictors
+d_text_agg <- d_text %>%
+  summarize(
+    distance_fullLIWC_b_z = mean(distance_fullLIWC_b_z),
+    distance_partialLIWC_b_z = mean(distance_partialLIWC_b_z),
+    distance_syntax_b_z = mean(distance_syntax_b_z),
+    iLIWC_b_z = mean(iLIWC_b_z),
+    npLIWC_b_z = mean(npLIWC_b_z),
+    polarity_b_z = mean(polarity_b_z),
+    iPron_b_z = mean(iPron_b_z),
+    mePron_b_z = mean(mePron_b_z),
+    minePron_b_z = mean(minePron_b_z),
+    nppVerb_b_z = mean(nppVerb_b_z),
+    npiVerb_b_z = mean(npiVerb_b_z),
+    .by = alias)
+d_person <- left_join(d_person, d_text_agg, by = "alias")
+```
+
+## Create correlation matrix of all person-level variables
+
+```{r}
+d_corr_person <- d_person[, c("PsychQOL_mean", "DASS_mean", "TAS_mean", "TEIQ_mean", "polarity_b_z", "distance_fullLIWC_b_z", "distance_partialLIWC_b_z", "distance_syntax_b_z",
+                              "iLIWC_b_z", "iPron_b_z", "mePron_b_z", "minePron_b_z", "npLIWC_b_z", "nppVerb_b_z", "npiVerb_b_z")]
+```
+
+```{r}
+new_names_person <- c("QOL", "DASS", "TAS", "TEIQ", "sent", "fLIWC", "pLIWC", "syntax", "iLIWC", "I", "me", "mine", "npLIWC", "perf", "imperf")
+colnames(d_corr_person) <- new_names_person
+```
+
+```{r}
+pdf("scatterplot_person.pdf")
+pairs.panels(d_corr_person,
+             method = "pearson",
+             hist.col = "#00AFBB",
+             density = FALSE,
+             ellipses = FALSE,
+             lm = TRUE,
+             show.points = TRUE,
+             smoother = TRUE,
+             stars = TRUE
+             )
+dev.off()
+```
+
+## Run OLS regression models
+
+### predicting trait EI
+
+```{r}
+d_EI <- read_csv("TEIQ_merged_no duplicate responses_all columns_updated scores_fixed IDs.csv", show_col_types = FALSE)
+EI_scale_items <- d_EI[, c("TEIQ_1_E", "TEIQ_2_E_R", "TEIQ_3", "TEIQ_4_SC_R", "TEIQ_5_WB_R", "TEIQ_6_S", "TEIQ_7_SC_R", "TEIQ_8_E_R", "TEIQ_9_WB", "TEIQ_10_S_R",
+                              "TEIQ_11_S", "TEIQ_12_WB_R", "TEIQ_13_E_R", "TEIQ_14_R", "TEIQ_15_SC", "TEIQ_16_E_R", "TEIQ_17_E", "TEIQ_18_R", "TEIQ_19_SC", "TEIQ_20_WB", 
+                              "TEIQ_21_S", "TEIQ_22_SC_R", "TEIQ_23_E", "TEIQ_24_WB", "TEIQ_25_S_R", "TEIQ_26_S_R", "TEIQ_27_WB", "TEIQ_28_E_R", "TEIQ_29", "TEIQ_30_SC")]
+reliability_alpha <- psych::alpha(EI_scale_items)
+summary(reliability_alpha)
+```
+
+```{r}
+df_EI <- as.data.frame(d_EI)
+reliability_multilevel <- multilevel.reliability(df_EI, grp = "alias", Time = "Time", items = 3:32, lmer = TRUE)
+print(reliability_multilevel)
+```
+
+```{r}
+ols_EI_fullLIWC <- lm(TEIQ_mean ~ distance_fullLIWC_b_z * polarity_b_z, data=d_person)
+summary(ols_EI_fullLIWC)
+```
+
+```{r}
+ols_EI_partialLIWC <- lm(TEIQ_mean ~ distance_partialLIWC_b_z * polarity_b_z, data=d_person)
+summary(ols_EI_partialLIWC)
+```
+
+```{r}
+ols_EI_syntax <- lm(TEIQ_mean ~ distance_syntax_b_z * polarity_b_z, data=d_person)
+summary(ols_EI_syntax)
+```
+
+
+### predicting psych QOL
+
+```{r}
+ols_QOL_fullLIWC <- lm(PsychQOL_mean ~ distance_fullLIWC_b_z * polarity_b_z, data=d_person)
+summary(ols_QOL_fullLIWC)
+```
+
+```{r}
+ols_QOL_partialLIWC <- lm(PsychQOL_mean ~ distance_partialLIWC_b_z * polarity_b_z, data=d_person)
+summary(ols_QOL_partialLIWC)
+```
+
+```{r}
+ols_QOL_syntax <- lm(PsychQOL_mean ~ distance_syntax_b_z * polarity_b_z, data=d_person)
+summary(ols_QOL_syntax)
+```
+
+

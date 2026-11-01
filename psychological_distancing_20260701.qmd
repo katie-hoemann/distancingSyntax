@@ -1,0 +1,317 @@
+---
+title: "psychological_distancing_20260701"
+author: "Katie Hoemann"
+format: html
+embed-resources: true
+---
+
+## Read in and prepare data
+
+```{r}
+# load required libraries (install if necessary)
+library(readr)
+library(dplyr)
+library(lme4) 
+library(lmerTest)
+library(datawizard)
+library(psych)
+library(easystats)
+library(modelbased)
+library(cocor)
+library(ggplot2)
+library(patchwork)
+```
+
+```{r}
+# read in data
+d_text <- read.csv("preprocessed_data_syntactic_features_pattern_LIWC.csv", fileEncoding='UTF-8-BOM')
+```
+
+```{r}
+# filter data
+d_text <- d_text[d_text$WC >= 15, ]
+dim(d_text)
+```
+
+## Calculate linguistic distancing variables from LIWC
+
+```{r}
+# z-score relevant LIWC variables
+d_text$Zi <- standardize(d_text$i)
+d_text$Zfocuspresent <- standardize(d_text$focuspresent)
+d_text$Zarticle <- standardize(d_text$article)
+d_text$Zdiscrep <- standardize(d_text$discrep)
+d_text$ZBigWords <- standardize(d_text$BigWords)
+```
+
+```{r}
+# reverse score necessary variables
+d_text$Zi_rev <- d_text$Zi*-1
+d_text$Zfocuspresent_rev <- d_text$Zfocuspresent*-1
+d_text$Zdiscrep_rev <- d_text$discrep*-1
+```
+
+```{r}
+# function to average variables
+rowwise_mean <- function(d_subset) {
+  Reduce(`+`, d_subset) / ncol(d_subset)
+}
+```
+
+```{r}
+# create LIWC-based indices
+d_text$distance_fullLIWC <- rowwise_mean(d_text[, c("Zi_rev", "Zfocuspresent_rev", "Zarticle", "Zdiscrep_rev", "ZBigWords")])
+d_text$distance_partialLIWC <- rowwise_mean(d_text[, c("Zi_rev", "Zfocuspresent_rev")]) # using only first-person singular pronouns and past tense
+```
+
+
+## Calculate linguistic distancing variables from syntactic features
+
+```{r}
+# convert to percentages of total text length
+d_text$pron_I_pct <- d_text$pron_I/d_text$WC*100
+d_text$pron_me_pct <- d_text$pron_me/d_text$WC*100
+d_text$pron_mine_pct <- d_text$pron_mine/d_text$WC*100
+d_text$verb_npp_pct <- d_text$verb_npp/d_text$WC*100
+d_text$verb_npi_pct <- d_text$verb_npi/d_text$WC*100
+```
+
+```{r}
+# aggregate variables to compare with LIWC
+d_text$i_pronouns <- d_text$pron_I_pct + d_text$pron_me_pct + d_text$pron_mine_pct # should be equivalent to i
+d_text$nonpast_verbs <- d_text$verb_npp_pct + d_text$verb_npi_pct # should be equivalent to focuspresent
+```
+
+```{r}
+# z-score variables for consistency with LIWC
+d_text$Zi_pronouns <- standardize(d_text$i_pronouns)
+d_text$Zpron_I_pct <- standardize(d_text$pron_I_pct)
+d_text$Zpron_me_pct <- standardize(d_text$pron_me_pct)
+d_text$Zpron_mine_pct <- standardize(d_text$pron_mine_pct)
+
+d_text$Znonpast_verbs <- standardize(d_text$nonpast_verbs)
+d_text$Zverb_npp_pct <- standardize(d_text$verb_npp_pct)
+d_text$Zverb_npi_pct <- standardize(d_text$verb_npi_pct)
+```
+
+```{r}
+# reverse-score necessary variables for consistency with LIWC
+d_text$Zi_pronouns_rev <- d_text$i_pronouns*-1 # should be equivalent to Zi_rev
+d_text$Zpron_I_pct_rev <- d_text$Zpron_I_pct*-1
+d_text$Zpron_me_pct_rev <- d_text$Zpron_me_pct*-1
+d_text$Zpron_mine_pct_rev <- d_text$Zpron_mine_pct*-1
+
+d_text$Znonpast_verbs_rev <- d_text$nonpast_verbs*-1 # should be equivalent to Zfocuspresent_rev
+d_text$Zverb_npp_pct_rev <- d_text$Zverb_npp_pct*-1
+d_text$Zverb_npi_pct_rev <- d_text$Zverb_npi_pct*-1
+```
+
+```{r}
+# define new potential measure of linguistic distancing
+d_text$distance_syntax <- rowwise_mean(d_text[, c("Zpron_I_pct_rev", "Zverb_npi_pct_rev")])
+```
+
+
+## Create correlation matrix of all momentary variables
+
+```{r}
+d_corr_text <- d_text[, c("valence", "polarity", "posemo", "negemo", "distance_fullLIWC", "distance_partialLIWC", "distance_syntax", 
+                    "Zi_rev", "Zi_pronouns_rev", "Zpron_I_pct_rev", "Zpron_me_pct_rev", "Zpron_mine_pct_rev", 
+                    "Zfocuspresent_rev", "Znonpast_verbs_rev", "Zverb_npp_pct_rev", "Zverb_npi_pct_rev")]
+```
+
+```{r}
+new_names_text <- c("val", "sent", "pos", "neg", "fLIWC", "pLIWC", "syntax", "iLIWC", "iPron", "I", "me", "mine", "npLIWC", "npVerb", "perf", "imperf")
+colnames(d_corr_text) <- new_names_text
+```
+
+```{r}
+pdf("scatterplot_text.pdf")
+pairs.panels(d_corr_text,
+             method = "pearson",
+             hist.col = "#00AFBB",
+             density = FALSE,
+             ellipses = FALSE,
+             lm = TRUE,
+             show.points = TRUE,
+             smoother = TRUE,
+             stars = TRUE
+             )
+dev.off()
+```
+
+
+## Prepare variables for analyses at the momentary level
+
+```{r}
+# isolate between-subjects variance at L2 to separate within-subjects variance
+d_text_agg <- d_text %>%
+  summarize(
+    distance_fullLIWC_b = mean(distance_fullLIWC, na.rm = TRUE),
+    distance_partialLIWC_b = mean(distance_partialLIWC, na.rm = TRUE),
+    iLIWC_b = mean(Zi_rev, na.rm = TRUE),
+    npLIWC_b = mean(Zfocuspresent_rev, na.rm = TRUE),
+    distance_syntax_b = mean(distance_syntax, na.rm = TRUE),
+    polarity_b = mean(polarity, na.rm = TRUE),
+    iPron_b = mean(Zpron_I_pct_rev, na.rm = TRUE),
+    mePron_b = mean(Zpron_me_pct_rev, na.rm = TRUE),
+    minePron_b = mean(Zpron_mine_pct_rev, na.rm = TRUE),
+    nppVerb_b = mean(Zverb_npp_pct_rev, na.rm = TRUE),
+    npiVerb_b = mean(Zverb_npi_pct_rev, na.rm = TRUE),
+    connectionId = mean(connectionId),
+    .by = alias
+    ) %>%
+  mutate(
+    distance_fullLIWC_b_c = center(distance_fullLIWC_b),
+    distance_partialLIWC_b_c = center(distance_partialLIWC_b),
+    iLIWC_b_c = center(iLIWC_b),
+    npLIWC_b_c = center(npLIWC_b),
+    distance_syntax_b_c = center(distance_syntax_b),
+    polarity_b_c = center(polarity_b),
+    iPron_b_c = center(iPron_b),
+    mePron_b_c = center(mePron_b),
+    minePron_b_c = center(minePron_b),
+    nppVerb_b_c = center(nppVerb_b),
+    npiVerb_b_c = center(npiVerb_b),
+  )
+d_text <- d_text %>%
+  left_join(d_text_agg, by = "connectionId")
+```
+
+```{r}
+# person-mean-center L1 variables
+d_text <- d_text %>%
+  group_by(connectionId) %>%
+  mutate(
+    distance_fullLIWC_w = distance_fullLIWC - distance_fullLIWC_b,
+    distance_partialLIWC_w = distance_partialLIWC - distance_partialLIWC_b,
+    iLIWC_w = Zi_rev - iLIWC_b,
+    npLIWC_w = Zfocuspresent_rev - npLIWC_b,
+    distance_syntax_w = distance_syntax - distance_syntax_b,
+    polarity_w = polarity - polarity_b,
+    iPron_w = Zpron_I_pct_rev - iPron_b,
+    mePron_w = Zpron_me_pct_rev - mePron_b,
+    minePron_w = Zpron_mine_pct_rev - minePron_b,
+    nppVerb_w = Zverb_npp_pct_rev - nppVerb_b,
+    npiVerb_w = Zverb_npi_pct_rev - npiVerb_b
+    ) %>%
+  ungroup()
+```
+
+## Run multilevel regression models
+
+### initial null model
+
+```{r}
+mlm_null <- lmer(valence ~ 1 + (1|connectionId), data=d_text)
+icc(mlm_null)
+```
+
+### full LIWC composite
+
+```{r}
+mlm_fullLIWC <- lmer(valence ~ distance_fullLIWC_w + (distance_fullLIWC_b_c|connectionId), data=d_text)
+model_parameters(mlm_fullLIWC, effects = "fixed")
+```
+
+```{r}
+# drop correlated slopes when needed to achieve convergence: https://r-statistics.co/R-Error-lme4-Convergence.html
+mlm_fullLIWC_sentiment <- lmer(valence ~ distance_fullLIWC_w * polarity_w + (distance_fullLIWC_b_c * polarity_b_c||connectionId), data=d_text) 
+model_parameters(mlm_fullLIWC_sentiment, effects = "fixed")
+```
+
+```{r}
+# https://easystats.github.io/modelbased/reference/estimate_slopes.html 
+slopes_fullLIWC_sentiment <- estimate_slopes(mlm_fullLIWC_sentiment, slope = "distance_fullLIWC_w", by = "polarity_w", length = 500)
+summary(slopes_fullLIWC_sentiment)
+```
+
+
+### partial LIWC composite
+
+```{r}
+mlm_partialLIWC <- lmer(valence ~ distance_partialLIWC_w + (distance_partialLIWC_b_c|connectionId), data=d_text)
+model_parameters(mlm_partialLIWC, effects = "fixed")
+```
+
+```{r}
+mlm_partialLIWC_sentiment <- lmer(valence ~ distance_partialLIWC_w * polarity_w + (distance_partialLIWC_b_c * polarity_b_c||connectionId), data=d_text) # singular fit
+model_parameters(mlm_partialLIWC_sentiment, effects = "fixed")
+```
+
+```{r}
+slopes_partialLIWC_sentiment <- estimate_slopes(mlm_partialLIWC_sentiment, slope = "distance_partialLIWC_w", by = "polarity_w", length = 500)
+summary(slopes_partialLIWC_sentiment)
+```
+
+
+### LIWC i
+
+```{r}
+mlm_iLIWC <- lmer(valence ~ iLIWC_w + (iLIWC_b_c|connectionId), data=d_text)
+model_parameters(mlm_iLIWC, effects = "fixed")
+```
+
+### LIWC np verbs
+
+```{r}
+mlm_npLIWC <- lmer(valence ~ npLIWC_w + (npLIWC_b_c|connectionId), data=d_text)
+model_parameters(mlm_npLIWC, effects = "fixed")
+```
+
+### i Pronouns
+
+```{r}
+mlm_iPronouns <- lmer(valence ~ iPron_w + mePron_w + minePron_w + (iPron_b_c + mePron_b_c + minePron_b_c||connectionId), data=d_text) # singular fit
+model_parameters(mlm_iPronouns, effects = "fixed")
+```
+
+### np Verbs
+
+```{r}
+mlm_npVerbs <- lmer(valence ~ nppVerb_w + npiVerb_w + (nppVerb_b_c + npiVerb_b_c||connectionId), data=d_text) # singular fit
+model_parameters(mlm_npVerbs, effects = "fixed")
+```
+
+
+### new syntax distance
+
+```{r}
+mlm_syntax <- lmer(valence ~ distance_syntax_w + (distance_syntax_b_c|connectionId), data=d_text)
+model_parameters(mlm_syntax, effects = "fixed")
+```
+
+```{r}
+mlm_syntax_sentiment <- lmer(valence ~ distance_syntax_w * polarity_w + (distance_syntax_b_c * polarity_b_c||connectionId), data=d_text) # singular fit
+model_parameters(mlm_syntax_sentiment, effects = "fixed")
+```
+
+```{r}
+slopes_syntax_sentiment <- estimate_slopes(mlm_syntax_sentiment, slope = "distance_syntax_w", by = "polarity_w", length = 500)
+summary(slopes_syntax_sentiment)
+```
+
+
+## Plot Johnson-Neyman intervals
+
+```{r}
+p1 <- plot(slopes_fullLIWC_sentiment) + labs(x = "sentiment", y = "full LIWC distance (slope)") + coord_cartesian(ylim = c(-0.5,6), xlim = c(-1.14,1))
+```
+
+```{r}
+p2 <- plot(slopes_partialLIWC_sentiment) + labs(x = "sentiment", y = "partial LIWC distance (slope)") + coord_cartesian(ylim = c(-0.5,6), xlim = c(-1.14,1))
+```
+
+```{r}
+p3 <- plot(slopes_syntax_sentiment) + labs(x = "sentiment", y = "syntax-based distance (slope)")  + coord_cartesian(ylim = c(-0.5,6), xlim = c(-1.14,1))
+```
+
+
+```{r}
+combined_plot <- p1 + p2 + p3
+final_figure <- combined_plot + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A') & theme_modern()
+ggsave("plot.png", width = 11, height = 5, units = "in", dpi = 300)
+```
+
+
+
